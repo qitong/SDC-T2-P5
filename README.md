@@ -1,115 +1,63 @@
-# CarND-Controls-MPC
-Self-Driving Car Engineer Nanodegree Program
+# SDC-T2-P5
+CarND-Controls-MPC
 
 ---
 
-## Dependencies
+## The Model
+In this project, I use the model predicative control introduced by SDC course.  
+The model, by taking the state of the car as and actuators (steering and accelaration) into account as well as Lf ( the distance between its center of gravity and front wheels), simulates the car in a more comprehensive way.  
+The model keeps tracking Cross Tracking Error (CTE) and Orientation Error (EPSI), and by trying to minimize those two errors, it gets close to the desired reference trajectory, the predictive functions are as follow:  
 
-* cmake >= 3.5
- * All OSes: [click here for installation instructions](https://cmake.org/install/)
-* make >= 4.1
-  * Linux: make is installed by default on most Linux distros
-  * Mac: [install Xcode command line tools to get make](https://developer.apple.com/xcode/features/)
-  * Windows: [Click here for installation instructions](http://gnuwin32.sourceforge.net/packages/make.htm)
-* gcc/g++ >= 5.4
-  * Linux: gcc / g++ is installed by default on most Linux distros
-  * Mac: same deal as make - [install Xcode command line tools]((https://developer.apple.com/xcode/features/)
-  * Windows: recommend using [MinGW](http://www.mingw.org/)
-* [uWebSockets](https://github.com/uWebSockets/uWebSockets)
-  * Run either `install-mac.sh` or `install-ubuntu.sh`.
-  * If you install from source, checkout to commit `e94b6e1`, i.e.
-    ```
-    git clone https://github.com/uWebSockets/uWebSockets 
-    cd uWebSockets
-    git checkout e94b6e1
-    ```
-    Some function signatures have changed in v0.14.x. See [this PR](https://github.com/udacity/CarND-MPC-Project/pull/3) for more details.
-* Fortran Compiler
-  * Mac: `brew install gcc` (might not be required)
-  * Linux: `sudo apt-get install gfortran`. Additionall you have also have to install gcc and g++, `sudo apt-get install gcc g++`. Look in [this Dockerfile](https://github.com/udacity/CarND-MPC-Quizzes/blob/master/Dockerfile) for more info.
-* [Ipopt](https://projects.coin-or.org/Ipopt)
-  * Mac: `brew install ipopt`
-  * Linux
-    * You will need a version of Ipopt 3.12.1 or higher. The version available through `apt-get` is 3.11.x. If you can get that version to work great but if not there's a script `install_ipopt.sh` that will install Ipopt. You just need to download the source from the Ipopt [releases page](https://www.coin-or.org/download/source/Ipopt/) or the [Github releases](https://github.com/coin-or/Ipopt/releases) page.
-    * Then call `install_ipopt.sh` with the source directory as the first argument, ex: `bash install_ipopt.sh Ipopt-3.12.1`. 
-  * Windows: TODO. If you can use the Linux subsystem and follow the Linux instructions.
-* [CppAD](https://www.coin-or.org/CppAD/)
-  * Mac: `brew install cppad`
-  * Linux `sudo apt-get install cppad` or equivalent.
-  * Windows: TODO. If you can use the Linux subsystem and follow the Linux instructions.
-* [Eigen](http://eigen.tuxfamily.org/index.php?title=Main_Page). This is already part of the repo so you shouldn't have to worry about it.
-* Simulator. You can download these from the [releases tab](https://github.com/udacity/self-driving-car-sim/releases).
-* Not a dependency but read the [DATA.md](./DATA.md) for a description of the data sent back from the simulator.
+```
+x(t+1)   = x(t) + v(t) * cos(psi(t)) * dt
+y(t+1)   = y(t) + v(t) * sin(psi(t)) * dt
+psi(t+1) = psi(t) + v(t) / Lf * delta(t) * dt
+v(t+1)   = v(t) + a(t) * dt
+cte(t+1)  = f(x(t)) - y(t) + v(t) * sin(epsi(t)) * dt
+epsi(t+1) = psi(t)  - psides(t) + v(t) * delta(t) / Lf * dt
+```
 
+--
 
-## Basic Build Instructions
+## Timestep Length and Elapsed Duration (N & dt)
 
+N is the number of timesteps, and dt is the time elapses between actuations. N * dt determines the total prediction horizon.  
 
-1. Clone this repo.
-2. Make a build directory: `mkdir build && cd build`
-3. Compile: `cmake .. && make`
-4. Run it: `./mpc`.
+When *N* goes up, it will help predict further future trajectory which will contribute to a smoother driving. However, the prediction is actually based on local approximation, and it gets unprecise when it predicts long future (thus I actually predict in every time step). And also, it takes more computation power when N getting larger.  
 
-## Tips
+When *dt* goes up,  the result predict trajectory will lead to a large bias increase, a rough fit of reference trajectory. While, a small dt leads to a more unstable prediction, a large variation, cause the car goes crazy.  
 
-1. It's recommended to test the MPC on basic examples to see if your implementation behaves as desired. One possible example
-is the vehicle starting offset of a straight line (reference). If the MPC implementation is correct, after some number of timesteps
-(not too many) it should find and track the reference line.
-2. The `lake_track_waypoints.csv` file has the waypoints of the lake track. You could use this to fit polynomials and points and see of how well your model tracks curve. NOTE: This file might be not completely in sync with the simulator so your solution should NOT depend on it.
-3. For visualization this C++ [matplotlib wrapper](https://github.com/lava/matplotlib-cpp) could be helpful.
+For my own implementation, I have N=8 and dt=0.08 (instead of N=25, dt=0.05 specified in mpc-to-line quiz solution).  
 
-## Editor Settings
+--
 
-We've purposefully kept editor configuration files out of this repo in order to
-keep it as simple and environment agnostic as possible. However, we recommend
-using the following settings:
+## Polynomial Fitting and MPC Preprocessing
+The waypoints to fit are given in a global coordinates, thus I first transformed it to the car's own coordinate first:
+```
+transformed_ptsx[i] = (ptsx[i] - px) * cos(psi) + (ptsy[i] - py) * sin(psi);
+transformed_ptsy[i] = -sin(psi) * (ptsx[i] - px) + (ptsy[i] - py) * cos(psi);
+```
+Then, I try to fit these points into a 3rd order polynomial (instead of 1st order in the mpc-to-line solution) as suggested in the course.
+```
+auto coeffs = polyfit(transformed_ptsx, transformed_ptsy, 3);
+```
+Also, I change the implementation for *f0* and *psides0* in MPC.cpp accordingly:
+```
+AD<double> f0 = coeffs[0] + coeffs[1] * x0 + coeffs[2] * x0 * x0 + coeffs[3] * x0 * x0 * x0;
+AD<double> psides0 = CppAD::atan(3 * coeffs[3] * x0 * x0 + 2 * coeffs[2] * x0 + coeffs[1]);
+```
 
-* indent using spaces
-* set tab width to 2 spaces (keeps the matrices in source code aligned)
+--
 
-## Code Style
+## Model Predictive Control with Latency
 
-Please (do your best to) stick to [Google's C++ style guide](https://google.github.io/styleguide/cppguide.html).
+This project asked taking a delay of 100 ms into account, as the delay between sensor-processing-actuator response. That is to say, we are actually predicting from past measurement.  
+To adapt to the delay, I add a *x* direction "drift", an approximation product by velocity, heading direction and delay:
+```
+px = v * 0.1 * cos(psi);
+```
+--
 
-## Project Instructions and Rubric
+## Result
 
-Note: regardless of the changes you make, your project must be buildable using
-cmake and make!
-
-More information is only accessible by people who are already enrolled in Term 2
-of CarND. If you are enrolled, see [the project page](https://classroom.udacity.com/nanodegrees/nd013/parts/40f38239-66b6-46ec-ae68-03afd8a601c8/modules/f1820894-8322-4bb3-81aa-b26b3c6dcbaf/lessons/b1ff3be0-c904-438e-aad3-2b5379f0e0c3/concepts/1a2255a0-e23c-44cf-8d41-39b8a3c8264a)
-for instructions and the project rubric.
-
-## Hints!
-
-* You don't have to follow this directory structure, but if you do, your work
-  will span all of the .cpp files here. Keep an eye out for TODOs.
-
-## Call for IDE Profiles Pull Requests
-
-Help your fellow students!
-
-We decided to create Makefiles with cmake to keep this project as platform
-agnostic as possible. Similarly, we omitted IDE profiles in order to we ensure
-that students don't feel pressured to use one IDE or another.
-
-However! I'd love to help people get up and running with their IDEs of choice.
-If you've created a profile for an IDE that you think other students would
-appreciate, we'd love to have you add the requisite profile files and
-instructions to ide_profiles/. For example if you wanted to add a VS Code
-profile, you'd add:
-
-* /ide_profiles/vscode/.vscode
-* /ide_profiles/vscode/README.md
-
-The README should explain what the profile does, how to take advantage of it,
-and how to install it.
-
-Frankly, I've never been involved in a project with multiple IDE profiles
-before. I believe the best way to handle this would be to keep them out of the
-repo root to avoid clutter. My expectation is that most profiles will include
-instructions to copy files to a new location to get picked up by the IDE, but
-that's just a guess.
-
-One last note here: regardless of the IDE used, every submitted project must
-still be compilable with cmake and make./
+[![SDC MPC Qitong](https://img.youtube.com/vi/bSyojyMOa88/0.jpg)](https://youtu.be/bSyojyMOa88)
